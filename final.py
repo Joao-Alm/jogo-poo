@@ -9,18 +9,6 @@ LARGURA_TELA = 800
 ALTURA_TELA = 600
 TITULO_TELA = "Jogo POO - IFPR"
 
-# --- Configuração da Spritesheet do jogador ---
-# Se for usar outra folha de sprites, basta ajustar os valores abaixo.
-ARQUIVO_SPRITESHEET = r"imagens\jogador_spritesheet.png"
-LARGURA_QUADRO = 48        # largura de CADA quadro, em pixels
-ALTURA_QUADRO = 48         # altura de CADA quadro, em pixels
-COLUNAS_SHEET = 4          # quantas colunas a folha tem
-TOTAL_QUADROS = 4          # quantos quadros a folha tem no total
-QUADRO_PARADO = 0          # índice do quadro "parado"
-QUADROS_ANDANDO = [1, 2]   # índices dos quadros do ciclo de caminhada
-QUADRO_PULO = 3            # índice do quadro de pulo/queda
-INTERVALO_ANIMACAO = 0.1   # 100 ms entre um quadro e outro da caminhada
-
 db = SqliteDatabase("ranking.db")
 
 
@@ -59,26 +47,35 @@ class Jogador(arcade.Sprite):
     def __init__(self):
         super().__init__()
 
-        # Carrega a folha de sprites e fatia em quadros (texturas)
+        # Carregamento seguro das texturas
         try:
-            folha = arcade.load_spritesheet(ARQUIVO_SPRITESHEET)
-            self.texturas = folha.get_texture_grid(
-                size=(LARGURA_QUADRO, ALTURA_QUADRO),
-                columns=COLUNAS_SHEET,
-                count=TOTAL_QUADROS,
-            )
-        except Exception as erro:
-            print(f"Aviso: não foi possível carregar a spritesheet ({erro}).")
-            quadro_reserva = arcade.make_soft_square_texture(32, arcade.color.GOLD)
-            self.texturas = [quadro_reserva] * TOTAL_QUADROS
+            self.tex_parado = arcade.load_texture(r"imagens\jogador.png")
+        except Exception:
+            try:
+                self.tex_parado = arcade.load_texture(r"imagens\jogador_parado.png")
+            except Exception:
+                self.tex_parado = arcade.make_soft_square_texture(32, arcade.color.GOLD)
 
-        # Escala única: todos os quadros da folha têm o mesmo tamanho
-        self.escala = 1.0
+        try:
+            self.tex_andando = arcade.load_texture(r"imagens\jogador_andando.png")
+        except Exception:
+            self.tex_andando = self.tex_parado
+
+        try:
+            self.tex_pulando = arcade.load_texture(r"imagens\jogador_pulando.png")
+        except Exception:
+            self.tex_pulando = self.tex_parado
 
         # Define a textura inicial
-        self.texture = self.texturas[QUADRO_PARADO]
-        self.scale_x = self.escala
-        self.scale_y = self.escala
+        self.texture = self.tex_parado
+        
+        # Escala fixa aplicada a todos os estados do jogador
+        self.escala_parado = 0.08
+        self.escala_andando = 0.07
+        self.escala_pulando = 0.07
+
+        self.scale_x = self.escala_parado
+        self.scale_y = self.escala_parado
 
         self.center_x = 100
         self.center_y = 100
@@ -87,65 +84,54 @@ class Jogador(arcade.Sprite):
         self.velocidade = 5
         self.tempo_invulneravel = 0
         self.virado_para = "direita"
-
+        
         # Estado de animação
         self.estado_atual = "parado"
-        self.quadro_atual = 0      # posição dentro de QUADROS_ANDANDO
-        self.tempo_quadro = 0      # tempo acumulado desde a última troca de quadro
+        self._ultima_direcao = "direita"
 
-    def update(self, delta_time=1 / 60):
-        # OBS: não chamamos super().update() de propósito, porque quem move o
-        # jogador é o PhysicsEnginePlatformer (evita mover duas vezes).
-
-        # Efeito de piscar quando está invulnerável
+    def update_animacao(self, delta_time, esta_movendo, no_chao):
         if self.tempo_invulneravel > 0:
             self.tempo_invulneravel -= delta_time
             self.alpha = 128 if int(self.tempo_invulneravel * 10) % 2 == 0 else 255
         else:
             self.alpha = 255
 
-        # Não deixa o jogador sair da tela
         if self.left < 0:
             self.left = 0
         if self.right > LARGURA_TELA:
             self.right = LARGURA_TELA
 
-        # --- Máquina de estados (ordem de prioridade) ---
-        # 1º Pulo/Queda  ->  2º Parado  ->  3º Andando
-        if self.change_y != 0:
-            novo_estado = "pulando"
-        elif self.change_x == 0:
-            novo_estado = "parado"
-        else:
-            novo_estado = "andando"
-
-        if novo_estado == "pulando":
-            self.texture = self.texturas[QUADRO_PULO]
-
-        elif novo_estado == "parado":
-            # Textura estática (o lado é definido pela direção abaixo)
-            self.texture = self.texturas[QUADRO_PARADO]
-
-        else:  # andando
-            # Se acabou de começar a andar, reinicia o ciclo da caminhada
-            if self.estado_atual != "andando":
-                self.quadro_atual = 0
-                self.tempo_quadro = 0
-
-            # Temporizador por delta_time: troca de quadro a cada 100 ms
-            self.tempo_quadro += delta_time
-            if self.tempo_quadro >= INTERVALO_ANIMACAO:
-                self.tempo_quadro -= INTERVALO_ANIMACAO
-                self.quadro_atual = (self.quadro_atual + 1) % len(QUADROS_ANDANDO)
-
-            self.texture = self.texturas[QUADROS_ANDANDO[self.quadro_atual]]
-
-        self.estado_atual = novo_estado
-
-        # Direção (virado_para): espelha a imagem quando olha para a esquerda
         direcao = -1 if self.virado_para == "esquerda" else 1
-        self.scale_x = self.escala * direcao
-        self.scale_y = self.escala
+
+        # Trava anti-flicker: Se está no chão e parado, o estado é estático
+        if no_chao and not esta_movendo:
+            novo_estado = "parado"
+        elif not no_chao:
+            novo_estado = "pulando"
+        elif esta_movendo:
+            novo_estado = "andando"
+        else:
+            novo_estado = "parado"
+
+        # Só reaplica a textura se o estado ou a direção realmente mudarem
+        if novo_estado != self.estado_atual or self.virado_para != self._ultima_direcao:
+            self.estado_atual = novo_estado
+            self._ultima_direcao = self.virado_para
+
+            if novo_estado == "pulando":
+                self.texture = self.tex_pulando
+                self.scale_x = self.escala_pulando * direcao
+                self.scale_y = self.escala_pulando
+            elif novo_estado == "andando":
+                self.texture = self.tex_andando
+                self.scale_x = self.escala_andando * direcao
+                self.scale_y = self.escala_andando
+            else:
+                self.texture = self.tex_parado
+                self.scale_x = self.escala_parado * direcao
+                self.scale_y = self.escala_parado
+
+
 
 
 class MoedaFixa(arcade.Sprite):
@@ -371,6 +357,8 @@ class JogoPrincipal(arcade.View):
             self.jogador, self.lista_blocos, gravity_constant=0.5
         )
 
+        
+        
         # Posições fixas das moedas
         posicoes_moedas = [
             (100, 70), (300, 70), (500, 70), (700, 70),
@@ -421,12 +409,16 @@ class JogoPrincipal(arcade.View):
         if self.jogo_finalizado:
             return
 
-        # 1º a física move o jogador (gravidade, colisões, pulo)...
         self.physics_engine.update()
 
-        # 2º o jogador atualiza a própria animação (usa change_x e change_y)
-        self.jogador.update(delta_time)
+        esta_movendo = (arcade.key.LEFT in self.teclas_pressionadas or
+                        arcade.key.A in self.teclas_pressionadas or
+                        arcade.key.RIGHT in self.teclas_pressionadas or
+                        arcade.key.D in self.teclas_pressionadas)
 
+        no_chao = self.physics_engine.can_jump()
+
+        self.jogador.update_animacao(delta_time, esta_movendo, no_chao)
         self.lista_moedas.update(delta_time)
         self.lista_inimigos.update()
 
@@ -522,8 +514,7 @@ class TelaVitoria(arcade.View):
                          anchor_x="center")
 
     def on_text(self, text):
-        # Aceita só caracteres imprimíveis e limita o tamanho do nome
-        if text.isprintable() and len(self.nome) < 15:
+        if text.isprintable():
             self.nome += text
 
     def on_key_press(self, key, modifiers):
@@ -531,12 +522,11 @@ class TelaVitoria(arcade.View):
             self.nome = self.nome[:-1]
         elif key == arcade.key.ENTER:
             if self.nome.strip():
-                registro = Pontuacao.create(
+                Pontuacao.create(
                     nome_jogador=self.nome.strip(),
                     pontos=self.pontos,
                     tempo_partida=self.tempo
                 )
-                print("Pontuação salva:", registro)  # usa o __str__ da Pontuacao
                 self.window.show_view(TelaRanking())
         elif key == arcade.key.ESCAPE:
             self.window.show_view(MenuPrincipal())
@@ -575,10 +565,7 @@ class TelaDerrota(arcade.View):
 class TelaRanking(arcade.View):
     def __init__(self):
         super().__init__()
-        # A consulta é executada UMA única vez, aqui no __init__.
-        # list(...) é o que realmente roda a consulta agora: sem ele, o Peewee
-        # guardaria só a "receita" da busca e ela rodaria dentro do on_draw().
-        self.melhores = list(
+        self.melhores = (
             Pontuacao.select()
             .order_by(Pontuacao.pontos.desc(), Pontuacao.tempo_partida.asc())
             .limit(10)
@@ -594,24 +581,14 @@ class TelaRanking(arcade.View):
                              ALTURA_TELA / 2, arcade.color.WHITE, 18,
                              anchor_x="center")
         else:
-            # Cabeçalho das colunas (posições X fixas = textos alinhados)
-            y_cab = ALTURA_TELA - 130
-            arcade.draw_text("Pos.", 100, y_cab, arcade.color.GOLD, 16, bold=True)
-            arcade.draw_text("Jogador", 170, y_cab, arcade.color.GOLD, 16, bold=True)
-            arcade.draw_text("Pontos", 560, y_cab, arcade.color.GOLD, 16,
-                             bold=True, anchor_x="right")
-            arcade.draw_text("Tempo", 700, y_cab, arcade.color.GOLD, 16,
-                             bold=True, anchor_x="right")
-
             for indice, pontuacao in enumerate(self.melhores, 1):
                 y = ALTURA_TELA - 130 - indice * 35
-                arcade.draw_text(f"{indice}º", 100, y, arcade.color.WHITE, 16)
-                arcade.draw_text(pontuacao.nome_jogador, 170, y,
-                                 arcade.color.WHITE, 16)
-                arcade.draw_text(f"{pontuacao.pontos}", 560, y,
-                                 arcade.color.WHITE, 16, anchor_x="right")
-                arcade.draw_text(f"{pontuacao.tempo_partida:.1f}s", 700, y,
-                                 arcade.color.WHITE, 16, anchor_x="right")
+                arcade.draw_text(
+                    f"{indice}º - {pontuacao.nome_jogador}: "
+                    f"{pontuacao.pontos} pontos - {pontuacao.tempo_partida:.1f}s",
+                    LARGURA_TELA / 2, y, arcade.color.WHITE, 16,
+                    anchor_x="center"
+                )
 
         arcade.draw_text("[M] Menu Principal", LARGURA_TELA / 2, 35,
                          arcade.color.WHITE, 15, anchor_x="center")
